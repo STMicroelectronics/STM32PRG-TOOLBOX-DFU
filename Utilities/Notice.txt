@@ -1,0 +1,3 @@
+The dfu-util source originated from the v0.11 release tarball.
+Pre-built binaries for dfu-util and the lsusb utility are downloaded from: 
+https://dfu-util.sourceforge.net/releases
