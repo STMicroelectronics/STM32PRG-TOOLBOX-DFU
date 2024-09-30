@@ -20,17 +20,18 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include "Inc/main.h"
-#include "Inc/ProgramManager.h"
+#include "main.h"
+#include "ProgramManager.h"
 #include <experimental/filesystem>
 namespace fs = std::experimental::filesystem;
 
-std::string PRG_TOOLBOX_DFU_VERSION = "1.0.0";
-
+std::string PRG_TOOLBOX_DFU_VERSION = "2.0.0";
 std::string toolboxRootPath = "" ;
 
 int main(int argc, char* argv[])
 {
+    std::string dfuSerialNumber = "";
+
     displayManager.print(MSG_NORMAL, L"      -------------------------------------------------------------------") ;
     displayManager.print(MSG_NORMAL, L"                      PRG-TOOLBOX-DFU v%s                      ", PRG_TOOLBOX_DFU_VERSION.c_str()) ;
     displayManager.print(MSG_NORMAL, L"      -------------------------------------------------------------------\n\n") ;
@@ -53,7 +54,24 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    /* Search for commands */
+    /* Check the list of commands before starting the execution (Option that can be placed anywhere on the command line) */
+    for (int cmdIdx=0; cmdIdx < nCommands; cmdIdx++)
+    {
+        if(compareStrings(argumentsList[cmdIdx].cmd , "-sn", true) || compareStrings(argumentsList[cmdIdx].cmd , "--serial", true))
+        {
+            if((argumentsList[cmdIdx].nParams != 1))
+            {
+                displayManager.print(MSG_ERROR, L"Wrong parameters for -sn/--serial command") ;
+                showHelp();
+                return EXIT_FAILURE;
+            }
+
+            dfuSerialNumber = argumentsList[cmdIdx].Params[0];
+            displayManager.print(MSG_NORMAL, L"Selected serial number : %s", dfuSerialNumber.data()) ;
+        }
+    }
+
+    /* Search and execute commands */
     for (int cmdIdx=0; cmdIdx < nCommands; cmdIdx++)
     {
         if (compareStrings(argumentsList[cmdIdx].cmd , "-?", true) || compareStrings(argumentsList[cmdIdx].cmd , "-h", true) || compareStrings(argumentsList[cmdIdx].cmd , "--help", true))
@@ -63,6 +81,34 @@ int main(int argc, char* argv[])
         else if(compareStrings(argumentsList[cmdIdx].cmd , "-v", true) || compareStrings(argumentsList[cmdIdx].cmd , "--version", true))
         {
             displayManager.print(MSG_NORMAL, L"PRG-TOOLBOX-DFU version : %s",  PRG_TOOLBOX_DFU_VERSION.data()) ;
+        }
+        else if(compareStrings(argumentsList[cmdIdx].cmd , "-l", true) || compareStrings(argumentsList[cmdIdx].cmd , "--list", true))
+        {
+            if((argumentsList[cmdIdx].nParams != 0))
+            {
+                displayManager.print(MSG_ERROR, L"Wrong parameters for -l/--list command") ;
+                showHelp();
+                return EXIT_FAILURE;
+            }
+
+            DFU *dfuInterface = new DFU();
+            dfuInterface->toolboxFolder = toolboxRootPath;
+            int ret = dfuInterface->displayDevicesList();
+
+            delete dfuInterface;
+            if(ret)
+                return EXIT_FAILURE;
+        }
+        else if(compareStrings(argumentsList[cmdIdx].cmd , "-sn", true) || compareStrings(argumentsList[cmdIdx].cmd , "--serial", true))
+        {
+            if((argumentsList[cmdIdx].nParams != 1))
+            {
+                displayManager.print(MSG_ERROR, L"Wrong parameters for -sn/--serial command") ;
+                showHelp();
+                return EXIT_FAILURE;
+            }
+
+            dfuSerialNumber = argumentsList[cmdIdx].Params[0];
         }
         else if(compareStrings(argumentsList[cmdIdx].cmd , "-d", true) || compareStrings(argumentsList[cmdIdx].cmd , "--download", true))
         {
@@ -122,8 +168,33 @@ int main(int argc, char* argv[])
                 }
             }
 
-            ProgramManager *programMng = new ProgramManager(toolboxRootPath);
-            int ret = programMng->startFlashingService(std::move(tsvFilePath), isStartFastboot);
+            ProgramManager *programMng = new ProgramManager(toolboxRootPath, dfuSerialNumber);
+            int ret = programMng->startInstallService(std::move(tsvFilePath), isStartFastboot);
+            delete programMng;
+
+            if(ret)
+                return EXIT_FAILURE;
+
+        }
+        else if(compareStrings(argumentsList[cmdIdx].cmd , "-f", true) || compareStrings(argumentsList[cmdIdx].cmd , "--flash", true))
+        {
+            if(argumentsList[cmdIdx].nParams != 1)
+            {
+                displayManager.print(MSG_ERROR, L"Wrong parameters for -f/--flash command") ;
+                showHelp();
+                return EXIT_FAILURE;
+            }
+
+            std::string tsvFilePath = argumentsList[cmdIdx].Params[0];
+            if(tsvFilePath.substr(tsvFilePath.size() - 4) != ".tsv" )
+            {
+                displayManager.print(MSG_ERROR, L"Flash command : wrong file extension !\nExpected file extension is .tsv") ;
+                showHelp();
+                return EXIT_FAILURE;
+            }
+
+            ProgramManager *programMng = new ProgramManager(toolboxRootPath, dfuSerialNumber);
+            int ret = programMng->startFlashingService(std::move(tsvFilePath));
             delete programMng;
 
             if(ret)
@@ -149,7 +220,7 @@ int main(int argc, char* argv[])
                 return EXIT_FAILURE;
             }
 
-            ProgramManager *programMng = new ProgramManager(toolboxRootPath);
+            ProgramManager *programMng = new ProgramManager(toolboxRootPath, dfuSerialNumber);
             int ret = -1 ;
 
             if(compareStrings(operationType, "write", true))
@@ -159,7 +230,10 @@ int main(int argc, char* argv[])
 
             delete programMng;
             if(ret)
+            {
+                displayManager.print(MSG_ERROR, L"OTP command, Read/Write operation failed !") ;
                 return EXIT_FAILURE;
+            }
         }
         else
         {
@@ -278,12 +352,17 @@ void showHelp()
 
     displayManager.print(MSG_NORMAL, L"--help        -h   -?       : Show the help menu.") ;
     displayManager.print(MSG_NORMAL, L"--version          -v       : Display the program version.") ;
+    displayManager.print(MSG_NORMAL, L"--list             -l       : Display the list of available STM32 DFU devices.") ;
+    displayManager.print(MSG_NORMAL, L"--serial           -sn      : Select the USB device by serial number.") ;
     displayManager.print(MSG_NORMAL, L"--download         -d       : Prepare the device, install U-Boot and enable/disable fastboot mode.") ;
     displayManager.print(MSG_NORMAL, L"       <filePath.tsv>       : TSV file path") ;
     displayManager.print(MSG_NORMAL, L"       <fastboot=0/1>       : Optional flag to configure the fastboot, possible value [0, 1]") ;
     displayManager.print(MSG_NORMAL, L"                              [0] initiate the flashing process and Fastboot will not be launched") ;
     displayManager.print(MSG_NORMAL, L"                              [1] initiate the flashing process and launch Fastboot") ;
     displayManager.print(MSG_NORMAL, L"                              Note: if it is not specified, the default value is 1") ;
+
+    displayManager.print(MSG_NORMAL, L"--flash            -f       : Prepare the device and flash the list of partitions through DFU interface") ;
+    displayManager.print(MSG_NORMAL, L"       <filePath.tsv>       : TSV file path") ;
 
     displayManager.print(MSG_NORMAL, L"--otp         -otp          : Read and write the OTP partition") ;
     displayManager.print(MSG_NORMAL, L"       <operationType>      : read/write") ;

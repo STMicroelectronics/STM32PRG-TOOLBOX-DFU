@@ -24,19 +24,20 @@
 #define PROGRAMMANAGER_H
 
 #include <iostream>
-#include "Inc/FileManager.h"
-#include "Inc/DisplayManager.h"
-#include "Inc/DFU.h"
-#include "Inc/Error.h"
+#include "FileManager.h"
+#include "DisplayManager.h"
+#include "DFU.h"
+#include "Error.h"
 
 class ProgramManager
 {
 public:
-    ProgramManager(const std::string toolboxFolder);
+    ProgramManager(const std::string toolboxFolder, const std::string dfuSerialNumber = "");
     ~ProgramManager();
-    int startFlashingService(const std::string inputTsvPath, bool isStartFastboot) ;
+    int startInstallService(const std::string inputTsvPath, bool isStartFastboot, bool isDfuFlashingCommand = false) ;
     int readOtpPartition(const std::string filePath) ;
     int writeOtpPartition(const std::string filePath) ;
+    int startFlashingService(const std::string inputTsvPath) ;
 
 private:
     void sleep(uint32_t ms) ;

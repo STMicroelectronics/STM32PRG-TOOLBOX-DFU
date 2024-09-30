@@ -21,7 +21,7 @@
  */
 
 
-#include "Inc/FileManager.h"
+#include "FileManager.h"
 #include <iomanip>
 #ifdef _WIN32
 #include <windows.h>
@@ -46,9 +46,10 @@ FileManager & FileManager::getInstance()
  * @brief FileManager::openTsvFile : Open and parse a TSV file containing the list of memory partitions.
  * @param fileName: The TSV file path.
  * @param parsedFile: Output variable to store the parsed file information.
+ * @param isStartFastboot: flag to select the mode to apply.
  * @return 0 if the operation is performed successfully, otherwise an error occurred.
  */
-int FileManager::openTsvFile(const std::string &fileName, fileTSV **parsedFile)
+int FileManager::openTsvFile(const std::string &fileName, fileTSV **parsedFile, bool isStartFastboot)
 {
     fileTSV* parsedTSV = nullptr;
     std::ifstream inFile(fileName);
@@ -82,7 +83,7 @@ int FileManager::openTsvFile(const std::string &fileName, fileTSV **parsedFile)
         return TOOLBOX_DFU_ERROR_OTHER;
     }
 
-    if(parseTsvFile(std::move(tsvFolderPath), &inFile, parsedTSV) == 0)
+    if(parseTsvFile(std::move(tsvFolderPath), &inFile, parsedTSV, isStartFastboot) == 0)
     {
         *parsedFile = parsedTSV;
         inFile.close();
@@ -97,14 +98,16 @@ int FileManager::openTsvFile(const std::string &fileName, fileTSV **parsedFile)
     return 0;
 }
 
+
 /**
  * @brief FileManager::parseTsvFile : The engine part of the methode "openTsvFile"
  * @param tsvFolderPath: The folder that contains the TSV file.
  * @param inFile: The TSV file path.
  * @param parsedTSV: Output variable to store the parsed file information.
+ * @param isStartFastboot: flag to select the mode to apply.
  * @return 0 if the operation is performed successfully, otherwise an error occurred.
  */
-int FileManager::parseTsvFile(const std::string tsvFolderPath, std::ifstream *inFile, fileTSV* parsedTSV)
+int FileManager::parseTsvFile(const std::string tsvFolderPath, std::ifstream *inFile, fileTSV* parsedTSV, bool isStartFastboot)
 {   
     inFile->seekg(0, std::ios::end) ;
     int fSize = inFile->tellg() ;
@@ -181,7 +184,11 @@ int FileManager::parseTsvFile(const std::string tsvFolderPath, std::ifstream *in
         parsedTSV->partitionsList.push_back(tempPartition);
     }
 
-    int ret = prepareUbootScriptFile(*parsedTSV) ;
+    int ret = 0;
+    if(isStartFastboot)
+        prepareUbootScriptFile(*parsedTSV) ; // for Fastboot context
+    else
+        prepareUbootFlashlayoutFile(*parsedTSV) ; // for DFU context
 
     return ret ;
 }
@@ -349,7 +356,7 @@ int FileManager::prepareUbootScriptFile(fileTSV &parsedTsvFile)
                     line.append(",uuid=").append(uuid.at("mmc2")) ;
             }
 
-            if(parsedTsvFile.partitionsList.at(i).partName.compare("bootfs") == 0)
+            if(parsedTsvFile.partitionsList.at(i).partName.find("bootfs") == 0)
                 line.append(",bootable");
 
             line.append("\\;") ;
@@ -411,7 +418,7 @@ uint32_t FileManager::getChecksumCrc32(unsigned char* data, uint32_t size)
  */
 int FileManager::saveTemproryScriptFile(const fileTSV parsedTsvFile, std::string &outTempFile)
 {
-    displayManager.print(MSG_NORMAL, L"Preparing U-Boot script...");
+    displayManager.print(MSG_NORMAL, L"Preparing U-Boot Script/Flashlayout...");
 
 #ifdef _WIN32
     char temp_dir[MAX_PATH];
@@ -440,9 +447,9 @@ int FileManager::saveTemproryScriptFile(const fileTSV parsedTsvFile, std::string
 #endif
 
 #ifdef _WIN32
-    std::ofstream outfile(tempFile);
+    std::ofstream outfile(tempFile, std::ios::binary | std::ios::out | std::ios::trunc);
 #else
-    std::ofstream outfile(tempFile.c_str());
+    std::ofstream outfile(tempFile.c_str(), std::ios::binary | std::ios::out | std::ios::trunc);
 #endif
 
     if (outfile.is_open())
@@ -515,4 +522,105 @@ bool FileManager::isValidTsvFile(fileTSV *myTsvFile, bool isBoot_PRGFW_UTIL)
     }
 
     return true ;
+}
+
+/**
+ * @brief FileManager::prepareUbootFlashlayoutFile : prepare a Flashlayout data representing the Flash memory partitions.
+ * @param parsedTsvFile: the TSV file that contains the list of partitions information.
+ * @return 0 if there is no issue, otherwise an error occured.
+ */
+int FileManager::prepareUbootFlashlayoutFile(fileTSV &parsedTsvFile)
+{
+    /* https://wiki.st.com/stm32mpu/wiki/How_to_load_U-Boot_with_dfu-util#Generate_an_flashlayout-stm32_file */
+
+    if(parsedTsvFile.partitionsList.empty())
+        return TOOLBOX_DFU_ERROR_NO_MEM;
+
+    std::string mdata = "" ;
+    try
+    {
+        for(size_t idx= 0; idx < parsedTsvFile.partitionsList.size(); idx++)
+        {
+            const partitionInfo &part = parsedTsvFile.partitionsList.at(idx);
+            char stPhaseId[10];
+            sprintf(stPhaseId, "0x%02X", part.phaseID);
+            mdata.append(part.opt).append("\t")
+                .append(stPhaseId).append("\t")
+                .append(part.partName).append("\t")
+                .append(part.partType).append("\t")
+                .append(part.partIp).append("\t")
+                .append(part.offset).append("\n");
+        }
+
+    }
+    catch (const std::exception& e)
+    {
+        displayManager.print(MSG_ERROR, L"Exception occured while preparing the U-Boot Flashlayout data : %s", e.what());
+        return TOOLBOX_DFU_ERROR_UNSUPPORTED_FILE_FORMAT;
+    }
+
+    /* Add STM32 header to the data, it will be authenticated by U-Boot */
+    createSTM32HeadredImage(mdata);
+    parsedTsvFile.scriptUbootTsvData = (unsigned char*)malloc(mdata.size()+1);
+    if(parsedTsvFile.scriptUbootTsvData == nullptr)
+    {
+        displayManager.print(MSG_ERROR, L"Unable to allocate memory for the Uboot Flashlayout TSV Data");
+        return TOOLBOX_DFU_ERROR_NO_MEM;
+    }
+
+    memcpy(parsedTsvFile.scriptUbootTsvData, (unsigned char*)mdata.data(), mdata.size()+1);
+    parsedTsvFile.scriptUbootTsvDataSize = mdata.size();
+
+    return TOOLBOX_DFU_NO_ERROR;
+}
+
+
+/**
+ * @brief FileManager::createSTM32HeadredImage : Add a STM32 header to a given data array to be decoded in next step by the U-Boot.
+ * @param data: The string data to deploy.
+ */
+void FileManager::createSTM32HeadredImage(std::string& data)
+{
+    /*https://wiki.st.com/stm32mpu/wiki/STM32_header_for_binary_files */
+
+    uint32_t checksumValue = 0;
+    for(uint32_t j=0 ; j<data.size() ; j++)
+    {
+        /* The checksum is the sum of all the bytes in the input data */
+        checksumValue += static_cast<unsigned char>(data[j]);
+    }
+
+    std::string header(FLASHLAYOUT_HEADER_SIZE, '\0'); // Initialize string with length and fill with null characters
+
+    // Add magic number: first 4 bytes
+    header[0] = 0x53; // 'S'
+    header[1] = 0x54; // 'T'
+    header[2] = 0x4D; // 'M'
+    header[3] = 0x32; // '2'
+
+    // Add checksum value at position 68th byte
+    header[68] = static_cast<char>(checksumValue & 0xFF);
+    header[69] = static_cast<char>((checksumValue >> 8) & 0xFF);
+    header[70] = static_cast<char>((checksumValue >> 16) & 0xFF);
+    header[71] = static_cast<char>((checksumValue >> 24) & 0xFF);
+
+    // Add header version at position 72nd byte
+    header[72] = 0x00;
+    header[73] = 0x00;
+    header[74] = 0x01;
+    header[75] = 0x00;
+
+    // Add image length at position 76th byte
+    header[76] = static_cast<char>(data.size() & 0xFF);
+    header[77] = static_cast<char>((data.size() >> 8) & 0xFF);
+    header[78] = static_cast<char>((data.size() >> 16) & 0xFF);
+    header[79] = static_cast<char>((data.size() >> 24) & 0xFF);
+
+    // Add option flag at 100th byte
+    header[100] = 0x01;
+    header[101] = 0x00;
+    header[102] = 0x00;
+    header[103] = 0x00;
+
+    data.insert(0,header);
 }

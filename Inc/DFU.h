@@ -24,10 +24,11 @@
 #define DFU_H
 
 #include <iostream>
-#include "Inc/DisplayManager.h"
-#include "Inc/Error.h"
+#include "DisplayManager.h"
+#include "Error.h"
 #include <thread>
 #include <chrono>
+#include <vector>
 
 enum STM32MP_DEVICE {
     STM32MP15 = 0x500,
@@ -41,25 +42,28 @@ public:
     DFU();
     int flashPartition(uint8_t partitionIndex, const std::string inputFirmwarePath) ;
     int dfuDetach() ;
-    bool isUbootDfuRunning() ;
-    bool isUbootDfuRunningTimeout() ;
-    bool isUbootFastbootRunning() ;
-    bool isUbootFastbootRunningTimeout() ;
-    bool isDfuDeviceExist() ;
+    bool isUbootDfuRunning(uint32_t msTimeout = 1000) ;
+    bool isUbootFastbootRunning(uint32_t msTimeout = 1000) ;
+    bool isDfuDeviceExist(uint32_t msTimeout = 1000) ;
     int getDeviceID() ;
     int readOtpPartition(const std::string filePath) ;
     int writeOtpPartition(const std::string filePath) ;
     bool isDfuUtilInstalled() ;
+    int getAlternateSettingIndex(const std::string altName, uint8_t *altIndex);
+    int displayDevicesList() ;
 
     uint16_t deviceID ;
     std::string otpPartitionName ;
     bool isSTM32PRGFW_UTIL ;
     std::string toolboxFolder = "" ;
+    std::string dfuSerialNumber = "" ;
+    std::vector<std::pair<int, std::string>> altSettingList ;
 
 private:
     DisplayManager displayManager = DisplayManager::getInstance() ;
     std::string getDfuUtilProgramPath() ;
     std::string getLsUsbProgramPath() ;
+    int getAlternateSettingList();
 };
 
 #endif // DFU_H

@@ -29,8 +29,8 @@
 #include <regex>
 #include <fstream>
 #include <cstdint>
-#include"Inc/DisplayManager.h"
-#include "Inc/Error.h"
+#include"DisplayManager.h"
+#include "Error.h"
 
 constexpr uint8_t TSV_NB_COLUMNS = 7;
 
@@ -38,6 +38,7 @@ constexpr uint32_t IH_MAGIC = 0x27051956;
 constexpr uint8_t IH_TYPE_SCRIPT = 6;
 constexpr uint8_t SCRIPT_LAYOUT_HEADER_SIZE = 64;
 constexpr uint8_t SCRIPT_INFO_HEADER_SIZE = 8;
+constexpr uint16_t FLASHLAYOUT_HEADER_SIZE = 256 ;
 
 struct partitionInfo
 {
@@ -81,18 +82,20 @@ class FileManager
 {
 public:
     static FileManager& getInstance() ;
-    int openTsvFile(const std::string &fileName, fileTSV **parsedFile);
+    int openTsvFile(const std::string &fileName, fileTSV **parsedFile, bool isStartFastboot = true);
     bool isValidTsvFile(fileTSV *myTsvFile, bool isBoot_PRGFW_UTIL) ;
     int saveTemproryScriptFile(const fileTSV parsedTsvFile, std::string &outTempFile) ;
     int removeTemproryScriptFile(const std::string tempFile) ;
 
 private:
     FileManager();
-    int parseTsvFile(const std::string tsvFolderPath, std::ifstream *inFile, fileTSV* parsedTSV);
+    int parseTsvFile(const std::string tsvFolderPath, std::ifstream *inFile, fileTSV* parsedTSV, bool isStartFastboot = true);
     int splitStdString(std::string str, std::regex, std::vector<std::string>& substrings) ;
     uint32_t getChecksumCrc32(unsigned char* data, uint32_t size) ;
     int prepareUbootScriptFile(fileTSV & parsedTsvFile) ;
     int prepareUbootScriptHeader(fileTSV &parsedTsvFile);
+    int prepareUbootFlashlayoutFile(fileTSV &parsedTsvFile) ;
+    void createSTM32HeadredImage(std::string& data);
 
     DisplayManager displayManager = DisplayManager::getInstance() ;
 

@@ -20,7 +20,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include "Inc/DFU.h"
+#include "DFU.h"
 #include <regex>
 #include <iostream>
 #include <experimental/filesystem>
@@ -46,6 +46,9 @@ int DFU::flashPartition(uint8_t partitionIndex, const std::string inputFirmwareP
     std::string utilCmd = getDfuUtilProgramPath().append("-d 483:df11") ;
     utilCmd.append(" -a ").append(std::to_string(partitionIndex)) ;
     utilCmd.append(" -D ").append(inputFirmwarePath) ;
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
+
 #ifdef _WIN32
         utilCmd = "\"" + utilCmd + "\"" ;
 #endif
@@ -92,8 +95,11 @@ int DFU::flashPartition(uint8_t partitionIndex, const std::string inputFirmwareP
  */
 int DFU::dfuDetach()
 {
-    displayManager.print(MSG_NORMAL, L"DFU-UTIL command: -d 483:df11 -a 0 -e") ;
     std::string  utilCmd =  getDfuUtilProgramPath().append("-d 483:df11 -a 0 -e") ;
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
+
+    displayManager.print(MSG_NORMAL, L"DFU-UTIL command: %s", utilCmd.data()) ;
     int ret = std::system(utilCmd.c_str());
     if(ret == 0)
     {
@@ -108,69 +114,20 @@ int DFU::dfuDetach()
 }
 
 /**
- * @brief DFU::isUbootDfutRunning : Verify if there is a U-Boot device runs in DFU mode.
- * @return True if an U-Boot in DFU mode is detected, otherwise, false.
- */
-bool DFU::isUbootDfuRunning()
-{
-    std::string  utilCmd =  getDfuUtilProgramPath().append("-d 483:df11 -l") ; /* ST DFU PID:0483 VID:DF11 */
-    displayManager.print(MSG_NORMAL, L"DFU-UTIL command: %s", utilCmd.data()) ;
-    FILE* pipe = popen(utilCmd.c_str(), "r");
-    if (pipe == nullptr)
-    {
-        displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
-        return false;
-    }
-
-    char buffer[4096];
-    std::string result = "";
-
-    while (!feof(pipe))
-    {
-        if (fgets(buffer, 4096, pipe) != nullptr)
-        {
-            result += buffer;
-        }
-    }
-    pclose(pipe);
-
-    try
-    {
-        std::regex pattern("name=(\"@OTP([^\\\"]*)\")");
-        std::smatch match;
-        if (std::regex_search(result, match, pattern))
-        {
-            otpPartitionName= match[1].str();
-            displayManager.print(MSG_NORMAL, L"OTP partition name=%s", otpPartitionName.c_str()) ;
-            displayManager.print(MSG_GREEN, L"U-Boot in DFU mode is running !") ;
-        }
-        else
-        {
-            displayManager.print(MSG_WARNING, L"U-Boot in DFU mode is not running !") ;
-            return false ;
-        }
-    }
-    catch (const std::regex_error& e)
-    {
-        displayManager.print(MSG_ERROR, L"Regex error: %s", e.what());
-        return false ;
-    }
-
-    return true ;
-}
-
-/**
- * @brief DFU::isUbootDfuRunningTimeout : Verify if there is a U-Boot device runs in DFU mode with timeout checks.
+ * @brief DFU::isUbootDfuRunning : Verify if there is a U-Boot device runs in DFU mode with timeout checks.
+ * @param msTimeout: The timeout duration in milliseconds to discover and search for the DFU device.
  * @return True if an U-Boot in DFU mode is started, otherwise, false.
  */
-bool DFU::isUbootDfuRunningTimeout()
+bool DFU::isUbootDfuRunning(uint32_t msTimeout)
 {
     std::string  utilCmd =  getDfuUtilProgramPath().append("-d 483:df11 -l") ; /* ST DFU PID:0483 VID:DF11 */
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
+
     displayManager.print(MSG_NORMAL, L"DFU-UTIL command: %s", utilCmd.data()) ;
 
-    bool isStarted = false ;
-    // Set the timeout duration
-    const std::chrono::seconds timeout_duration(30);
+    bool isDfuRunning = false ;
+    const std::chrono::milliseconds timeout_duration(msTimeout);
     const auto start_time = std::chrono::steady_clock::now();
 
     while (true)
@@ -179,7 +136,7 @@ bool DFU::isUbootDfuRunningTimeout()
         const auto elapsed_time = std::chrono::steady_clock::now() - start_time;
         if (elapsed_time >= timeout_duration)
         {
-             displayManager.print(MSG_WARNING, L"Timeout reached !") ;
+            displayManager.print(MSG_WARNING, L"Timeout [%d ms] is reached to discover U-Boot DFU device!", msTimeout) ;
             break;
         }
 
@@ -209,7 +166,8 @@ bool DFU::isUbootDfuRunningTimeout()
             std::smatch match;
             if (std::regex_search(result, match, pattern))
             {
-                isStarted = true ;
+                isDfuRunning = true ;
+                otpPartitionName = match[1].str();
                 break;
             }
         }
@@ -223,46 +181,80 @@ bool DFU::isUbootDfuRunningTimeout()
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    return isStarted;
+    if (isDfuRunning)
+        displayManager.print(MSG_GREEN, L"U-Boot in DFU mode is running !") ;
+    else
+        displayManager.print(MSG_WARNING, L"U-Boot in DFU mode is not running !") ;
+
+    return isDfuRunning;
 }
 
 /**
- * @brief DFU::isDfuDeviceExist : Verify the precense of a STM32 DFU device.
+ * @brief DFU::isDfuDeviceExist: Verify if there is a plugged-in STM32 DFU device with timeout checks.
+ * @param msTimeout: The timeout duration in milliseconds to discover and search for the DFU device.
  * @return True if a device is present, otherwise, false.
  */
-bool DFU::isDfuDeviceExist()
+bool DFU::isDfuDeviceExist(uint32_t msTimeout)
 {
     std::string  utilCmd =  getDfuUtilProgramPath().append("-d 483:df11 -l") ; /* ST DFU PID:0483 VID:0AFB */
-    FILE* pipe = popen(utilCmd.c_str(), "r");
-    if (pipe == nullptr)
-    {
-        displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
-        return false;
-    }
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
 
-    char buffer[4096];
-    std::string result = "";
+    bool isExist = false ;
+    const std::chrono::milliseconds timeout_duration(msTimeout);
+    const auto start_time = std::chrono::steady_clock::now();
 
-    while (!feof(pipe))
+    while (true)
     {
-        if (fgets(buffer, 4096, pipe) != nullptr)
+        // Check if the timeout has been reached
+        const auto elapsed_time = std::chrono::steady_clock::now() - start_time;
+        if (elapsed_time >= timeout_duration)
         {
-            result += buffer;
+            displayManager.print(MSG_WARNING, L"Timeout [%d ms] is reached to found the STM32 DFU device!", msTimeout) ;
+            break;
         }
-    }
-    pclose(pipe);
 
-    std::string searchString = "Found DFU: [0483:df11]";
-    size_t pos = result.find(searchString);
-    if (pos != std::string::npos)
-    {
-        return true ;
+        FILE* pipe = popen(utilCmd.c_str(), "r");
+        if (pipe == nullptr)
+        {
+            displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
+            return false;
+        }
+
+        char buffer[4096];
+        std::string result = "";
+
+        while (!feof(pipe))
+        {
+            if (fgets(buffer, 4096, pipe) != nullptr)
+            {
+                result += buffer;
+            }
+        }
+        pclose(pipe);
+
+        std::string searchString = "Found DFU: [0483:df11]";
+        size_t pos = result.find(searchString);
+        if (pos != std::string::npos)
+        {
+            isExist = true ;
+            break ;
+        }
+
+        // Sleep for a short time to simulate work being done
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
     }
-    else
+
+    if (isExist == false)
     {
-        displayManager.print(MSG_ERROR, L"No STM32 DFU device is detected !") ;
-        return false ;
+        if(this->dfuSerialNumber != "")
+            displayManager.print(MSG_ERROR, L"No STM32 DFU device [%s] is detected !", this->dfuSerialNumber.data()) ;
+        else
+            displayManager.print(MSG_ERROR, L"No STM32 DFU device is detected !") ;
     }
+
+    return isExist;
 }
 
 /**
@@ -309,57 +301,16 @@ int DFU::getDeviceID()
 }
 
 /**
- * @brief DFU::isUbootFastbootRunning . Verify if there is a U-Boot device runs in Fastboot mode.
+ * @brief DFU::isUbootFastbootRunning: Verify if there is a U-Boot device runs in Fastboot mode with timeout checks.
+ * @param msTimeout: The timeout duration in milliseconds to discover and search for the fastboot device.
  * @return True if an U-Boot in Fastboot mode is detected, otherwise, false.
  */
-bool DFU::isUbootFastbootRunning()
-{
-    std::string  utilCmd =  getLsUsbProgramPath().append("-d 0483:0afb") ; /* ST Fastboot PID:0483 VID:0AFB */
-    FILE* pipe = popen(utilCmd.c_str(), "r");
-    if (pipe == nullptr)
-    {
-        displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
-        return false;
-    }
-
-    char buffer[4096];
-    std::string result = "";
-
-    while (!feof(pipe))
-    {
-        if (fgets(buffer, 4096, pipe) != nullptr)
-        {
-            result += buffer;
-        }
-    }
-    pclose(pipe);
-
-    std::string searchString = "ID 0483:0afb";
-    size_t pos = result.find(searchString);
-    if (pos != std::string::npos)
-    {
-        displayManager.print(MSG_GREEN, L"U-Boot in Fastboot mode is running !") ;
-        return true ;
-
-    }
-    else
-    {
-        displayManager.print(MSG_WARNING, L"No U-Boot in Fastboot mode is running !") ;
-        return false ;
-    }
-}
-
-/**
- * @brief DFU::isUbootFastbootRunningTimeout . Verify if there is a U-Boot device runs in Fastboot mode with timeout checks.
- * @return True if an U-Boot in Fastboot mode is detected, otherwise, false.
- */
-bool DFU::isUbootFastbootRunningTimeout()
+bool DFU::isUbootFastbootRunning(uint32_t msTimeout)
 {
     std::string  utilCmd =  getLsUsbProgramPath().append("-d 0483:0afb") ; /* ST Fastboot PID:0483 VID:0AFB */
 
     bool isRunning = false ;
-    // Set the timeout duration
-    const std::chrono::seconds timeout_duration(30);
+    const std::chrono::milliseconds timeout_duration(msTimeout);
     const auto start_time = std::chrono::steady_clock::now();
 
     while (true)
@@ -368,7 +319,7 @@ bool DFU::isUbootFastbootRunningTimeout()
         const auto elapsed_time = std::chrono::steady_clock::now() - start_time;
         if (elapsed_time >= timeout_duration)
         {
-            displayManager.print(MSG_WARNING, L"Timeout reached !") ;
+            displayManager.print(MSG_WARNING, L"Timeout [%d ms] is reached to discover Fastboot device!", msTimeout) ;
             break;
         }
 
@@ -403,6 +354,11 @@ bool DFU::isUbootFastbootRunningTimeout()
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
+    if (isRunning)
+        displayManager.print(MSG_GREEN, L"U-Boot in Fastboot mode is running !") ;
+    else
+        displayManager.print(MSG_WARNING, L"No U-Boot in Fastboot mode is running !") ;
+
     return isRunning;
 }
 
@@ -421,8 +377,13 @@ int DFU::readOtpPartition(const std::string filePath)
        if(state == false)
            return TOOLBOX_DFU_ERROR_OTHER ;
     }
+
+    displayManager.print(MSG_NORMAL, L"OTP partition name = %s", otpPartitionName.c_str()) ;
+
     utilCmd.append(otpPartitionName) ;
     utilCmd.append(" -U ").append(filePath) ;
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
 
 #ifdef _WIN32
     utilCmd = "\"" + utilCmd + "\"" ;
@@ -478,8 +439,13 @@ int DFU::writeOtpPartition(const std::string filePath)
        if(state == false)
            return TOOLBOX_DFU_ERROR_OTHER;
     }
+
+    displayManager.print(MSG_NORMAL, L"OTP partition name = %s", otpPartitionName.c_str()) ;
+
     utilCmd.append(otpPartitionName) ;
     utilCmd.append(" -D ").append(filePath) ;
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
 
 #ifdef _WIN32
     utilCmd = "\"" + utilCmd + "\"" ;
@@ -604,4 +570,167 @@ bool DFU::isDfuUtilInstalled()
     {
         return true ;
     }
+}
+
+/**
+ * @brief DFU::getAlternateSettingList : Get the list of the alternate settings for the current DFU device.
+ * @return 0 if the operation is performed successfully, otherwise an error occurred.
+ */
+int DFU::getAlternateSettingList()
+{
+    std::string  utilCmd =  getDfuUtilProgramPath().append("-d 483:df11 -l") ; /* ST DFU PID:0483 VID:DF11 */
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
+    displayManager.print(MSG_NORMAL, L"DFU-UTIL command: %s", utilCmd.data()) ;
+
+    FILE* pipe = popen(utilCmd.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
+        return TOOLBOX_DFU_ERROR_NO_MEM;
+    }
+
+    char buffer[4096];
+    std::string result = "";
+
+    while (!feof(pipe))
+    {
+        if (fgets(buffer, 4096, pipe) != nullptr)
+        {
+            result += buffer;
+        }
+    }
+    pclose(pipe);
+
+    try
+    {
+        std::regex altNameRegex("alt=([0-9]+).*?name=\"@([^/]+)");
+        auto begin = std::sregex_iterator(result.begin(), result.end(), altNameRegex);
+        auto end = std::sregex_iterator();
+
+        for (std::sregex_iterator i = begin; i != end; ++i) {
+            std::smatch match = *i;
+            int alt = std::stoi(match[1].str());
+            std::string name = match[2].str();
+            this->altSettingList.emplace_back(alt, name);
+        }
+    }
+    catch (const std::regex_error& e)
+    {
+        displayManager.print(MSG_ERROR, L"Regex error: %s", e.what());
+        return TOOLBOX_DFU_ERROR_OTHER ;
+    }
+
+    return TOOLBOX_DFU_NO_ERROR;
+}
+
+/**
+ * @brief DFU::getAlternateSettingIndex: Get the alternate setting index of a specific alternate name.
+ * @param altName: Input string corresponding to the alternate name to be searched.
+ * @param altIndex: The output Index value represneting the mentioned alternate name.
+ * @return 0 if the operation is performed successfully, otherwise an error occurred.
+ */
+int DFU::getAlternateSettingIndex(const std::string altName, uint8_t *altIndex)
+{
+    int ret = TOOLBOX_DFU_NO_ERROR;
+    bool isIndexFound = false ;
+
+    if(this->altSettingList.empty())
+    {
+        /* Read the DFU device and get the list of the avaialble alternate setting */
+        ret = getAlternateSettingList() ;
+        if(ret != TOOLBOX_DFU_NO_ERROR)
+            return ret ;
+    }
+
+    /* The List of alternate setting is already populated */
+    for(uint8_t idx = 0 ; idx < this->altSettingList.size(); idx ++)
+    {
+        if(this->altSettingList.at(idx).second == altName)
+        {
+            *altIndex = this->altSettingList.at(idx).first ;
+            isIndexFound = true ;
+            displayManager.print(MSG_NORMAL, L"DFU device : Alternate name [%s] is found with alternate index [%d]", altName.c_str(), *altIndex);
+            break ;
+        }
+    }
+
+    if(isIndexFound == false)
+    {
+        displayManager.print(MSG_ERROR, L"DFU device : Alternate name [%s] does not exist !", altName.c_str());
+        ret = TOOLBOX_DFU_ERROR_INTERFACE_NOT_SUPPORTED;
+    }
+
+    return ret;
+}
+
+/**
+ * @brief DFU::displayDevicesList: Print the list of available STM32 DFU devices.
+ * @return : 0 if the operation is performed successfully, otherwise an error occurred.
+ */
+int DFU::displayDevicesList()
+{
+    std::string  utilCmd =  getDfuUtilProgramPath().append("-d 483:df11 -l") ; /* ST DFU PID:0483 VID:DF11 */
+    displayManager.print(MSG_NORMAL, L"DFU-UTIL command: %s", utilCmd.data()) ;
+
+    FILE* pipe = popen(utilCmd.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
+        return TOOLBOX_DFU_ERROR_OTHER;
+    }
+
+    char buffer[4096];
+    std::string result = "";
+    while (!feof(pipe))
+    {
+        if (fgets(buffer, 4096, pipe) != nullptr)
+        {
+            result += buffer;
+        }
+    }
+    pclose(pipe);
+
+    std::map<std::string, std::string> deviceMap;
+    try
+    {
+        std::regex regex("devnum=(\\d+).*serial=\"([A-F0-9]+)\"");
+        std::smatch match;
+        std::string::const_iterator searchStart(result.cbegin());
+        while (std::regex_search(searchStart, result.cend(), match, regex))
+        {
+            std::string devnum = match[1];
+            std::string serial = match[2];
+            deviceMap[serial] = std::move(devnum);
+            searchStart = match.suffix().first;
+        }
+    }
+    catch (const std::regex_error& e)
+    {
+        displayManager.print(MSG_ERROR, L"Regex error: %s", e.what());
+        return false ;
+    }
+
+
+    // Check if any devices were found
+    if (deviceMap.empty())
+    {
+        displayManager.print(MSG_NORMAL, L"") ;
+        displayManager.print(MSG_WARNING, L"No STM32 DFU devices found.") ;
+    }
+    else
+    {
+        displayManager.print(MSG_GREEN, L"\nSTM32 DFU devices List") ;
+        displayManager.print(MSG_NORMAL, L" Number of STM32 DFU devices: %d", deviceMap.size()) ;
+        int deviceCount = 1;
+        for (const auto& device : deviceMap)
+        {
+            displayManager.print(MSG_NORMAL, L" [Device %d] : ", deviceCount) ;
+            displayManager.print(MSG_NORMAL, L"     Dev Num : %s", device.second.c_str()) ;
+            displayManager.print(MSG_NORMAL, L"     Serial number : %s", device.first.c_str()) ;
+            deviceCount++;
+        }
+    }
+
+    return TOOLBOX_DFU_NO_ERROR ;
 }
