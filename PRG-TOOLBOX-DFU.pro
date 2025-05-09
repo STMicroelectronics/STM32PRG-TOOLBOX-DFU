@@ -7,7 +7,7 @@ QMAKE_LFLAGS +=-static -static-libgcc -static-libstdc++
 LIBS += -lstdc++fs
 MAKEFILE = qtMakefile
 
-VERSION = 2.0.0
+VERSION = 2.1.0
 QMAKE_TARGET_COMPANY = "STMicroelectronics"
 QMAKE_TARGET_PRODUCT = "PRG-TOOLBOX-DFU"
 QMAKE_TARGET_COPYRIGHT = "Copyrights 2024 STMicroelectronics"

@@ -29,6 +29,14 @@
 #include "DFU.h"
 #include "Error.h"
 
+struct GetPhaseStruct
+{
+    uint8_t Phase;          // Phase P expected by device
+    uint32_t Address;       // 0xFFFFFFFF or load address in embedded RAM
+    uint32_t Offset;        // 0x0
+    uint8_t NeedDFUDetach;  // Present only if P = 0, 1 : DFU detach is requested for a new USB enumeration
+};
+
 class ProgramManager
 {
 public:
@@ -38,6 +46,7 @@ public:
     int readOtpPartition(const std::string filePath) ;
     int writeOtpPartition(const std::string filePath) ;
     int startFlashingService(const std::string inputTsvPath) ;
+    int getPhase(uint8_t* phase, bool* isNeedDetach) ;
 
 private:
     void sleep(uint32_t ms) ;

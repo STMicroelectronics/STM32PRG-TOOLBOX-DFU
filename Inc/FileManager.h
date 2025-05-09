@@ -85,7 +85,8 @@ public:
     int openTsvFile(const std::string &fileName, fileTSV **parsedFile, bool isStartFastboot = true);
     bool isValidTsvFile(fileTSV *myTsvFile, bool isBoot_PRGFW_UTIL) ;
     int saveTemproryScriptFile(const fileTSV parsedTsvFile, std::string &outTempFile) ;
-    int removeTemproryScriptFile(const std::string tempFile) ;
+    int removeTemproryFile(const std::string tempFile) ;
+    int getTemproryFile(std::string &outTempFile) ;
 
 private:
     FileManager();

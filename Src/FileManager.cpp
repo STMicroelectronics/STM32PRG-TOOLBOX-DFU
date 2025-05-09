@@ -301,6 +301,7 @@ int FileManager::prepareUbootScriptFile(fileTSV &parsedTsvFile)
 
         std::string line = "" ;
         line.append("name=").append(parsedTsvFile.partitionsList.at(i).partName);
+        line.append(",start=").append(parsedTsvFile.partitionsList.at(i).offset);
 
         if((i+1) >= (uint8_t) parsedTsvFile.partitionsList.size())
         {
@@ -470,16 +471,11 @@ int FileManager::saveTemproryScriptFile(const fileTSV parsedTsvFile, std::string
 }
 
 /**
- * @brief FileManager::removeTemproryScriptFile
- * @param tempFile: The path of temprory file to be removed.
- */
-
-/**
- * @brief FileManager::removeTemproryScriptFile
+ * @brief FileManager::removeTemproryFile
  * @param tempFile: The path of temprory file to be removed.
  * @return 0 if there is no issue, otherwise an error occured.
  */
-int FileManager::removeTemproryScriptFile(const std::string tempFile)
+int FileManager::removeTemproryFile(const std::string tempFile)
 {
     displayManager.print(MSG_NORMAL, L"Removing temprory file : %s", tempFile.c_str());
     return std::remove(tempFile.c_str());
@@ -623,4 +619,43 @@ void FileManager::createSTM32HeadredImage(std::string& data)
     header[103] = 0x00;
 
     data.insert(0,header);
+}
+
+/**
+ * @brief FileManager::getTemproryFile: Prepare and get a temprory file path (expected to be deleted later)
+ * @param outTempFile: Output variable to give the temprory path.
+ * @return 0 if the operation is performed successfully, otherwise an error occurred.
+ */
+int FileManager::getTemproryFile(std::string &outTempFile)
+{
+#ifdef _WIN32
+    char temp_dir[MAX_PATH];
+    DWORD result = GetTempPathA(MAX_PATH, temp_dir);
+    if ((result == 0) || (result > MAX_PATH))
+    {
+        displayManager.print(MSG_ERROR, L"Could not get temporary directory!");
+        return TOOLBOX_DFU_ERROR_NO_FILE;
+    }
+
+    char tempFile[MAX_PATH];
+    result = GetTempFileNameA(temp_dir, "STM32", 0, tempFile);
+    if (result == 0)
+    {
+        displayManager.print(MSG_ERROR, L"Could not get temporary directory!");
+        return TOOLBOX_DFU_ERROR_NO_FILE;
+    }
+#else // Linux
+    const char* temp_dir = std::getenv("TMPDIR");
+    if (temp_dir == nullptr)
+    {
+        temp_dir = "/tmp";
+    }
+
+    std::string tempFile = std::string(temp_dir) + "/STM32";
+#endif
+
+    outTempFile.erase();
+    outTempFile +=  tempFile ;
+
+    return TOOLBOX_DFU_NO_ERROR;
 }

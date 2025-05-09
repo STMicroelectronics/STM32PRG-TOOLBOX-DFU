@@ -177,7 +177,7 @@ int ProgramManager::startInstallService(const std::string inputTsvPath, bool isS
                     return ret ;
             }
         }
-        else if(dfuInterface->deviceID == STM32MP25)
+        else if((dfuInterface->deviceID == STM32MP25) || (dfuInterface->deviceID == STM32MP21))
         {
             /* fsbl-boot */
             ret = dfuInterface->flashPartition(0, parsedTsvFile->partitionsList.at(0).binary) ;
@@ -251,7 +251,7 @@ int ProgramManager::startInstallService(const std::string inputTsvPath, bool isS
         if(ret != 0)
         {
             displayManager.print(MSG_ERROR, L"Failed to program flashlayout at partition 0 !");
-            if(fileManager.removeTemproryScriptFile(tempFile.c_str()) != TOOLBOX_DFU_NO_ERROR)
+            if(fileManager.removeTemproryFile(tempFile.c_str()) != TOOLBOX_DFU_NO_ERROR)
             {
                 displayManager.print(MSG_ERROR, L"Failed to remove the temprory file !");
                 return TOOLBOX_DFU_ERROR_NO_MEM ;
@@ -259,7 +259,7 @@ int ProgramManager::startInstallService(const std::string inputTsvPath, bool isS
             return ret ;
         }
 
-        if(fileManager.removeTemproryScriptFile(tempFile.c_str()) != TOOLBOX_DFU_NO_ERROR)
+        if(fileManager.removeTemproryFile(tempFile.c_str()) != TOOLBOX_DFU_NO_ERROR)
         {
             displayManager.print(MSG_ERROR, L"Failed to remove the temprory file !");
             return TOOLBOX_DFU_ERROR_NO_MEM ;
@@ -387,29 +387,143 @@ int ProgramManager::writeOtpPartition(const std::string filePath)
  */
 int ProgramManager::startFlashingService(const std::string inputTsvPath)
 {
-    auto start = std::chrono::high_resolution_clock::now(); // get start time
-    int ret = TOOLBOX_DFU_ERROR_OTHER;
-    ret = startInstallService(inputTsvPath, false, true) ;
-    if(ret != TOOLBOX_DFU_NO_ERROR)
-        return ret;
-
     displayManager.print(MSG_NORMAL, L"\nStart DFU flashing service...\n\n");
 
-    for(auto &part: parsedTsvFile->partitionsList)
+    auto start = std::chrono::high_resolution_clock::now(); // get start time
+    if(fileManager.openTsvFile(inputTsvPath, &parsedTsvFile, false) != 0)
     {
-        std::string patternNone = "none\"";
-        if((part.opt == "-") || (part.binary == "none") || (part.binary.size() >= patternNone.size() && part.binary.substr(part.binary.size() - patternNone.size()) == patternNone)) //ignore the field containing none keyword
-            continue ;
+        displayManager.print(MSG_ERROR, L"Failed to download TSV partitions: %s", inputTsvPath.c_str());
+        return TOOLBOX_DFU_ERROR_NO_FILE ;
+    }
 
-        uint8_t alternateIndex = 0xFF;
-        ret = this->dfuInterface->getAlternateSettingIndex(part.partName, &alternateIndex);
-        if(ret != TOOLBOX_DFU_NO_ERROR)
-            break;
-        ret = dfuInterface->flashPartition(alternateIndex, part.binary) ;
+
+    displayManager.print(MSG_NORMAL, L"-----------------------------------------");
+    displayManager.print(MSG_GREEN, L"TSV DFU flashing...");
+    displayManager.print(MSG_NORMAL, L"  TSV path           : %s", inputTsvPath.data() );
+    displayManager.print(MSG_NORMAL, L"  Partitions number  : %d", parsedTsvFile->partitionsList.size() );
+    displayManager.print(MSG_NORMAL,L"-----------------------------------------\n" );
+
+    if(fileManager.isValidTsvFile(parsedTsvFile, dfuInterface->isSTM32PRGFW_UTIL) == false)
+        return TOOLBOX_DFU_ERROR_WRONG_PARAM ;
+
+    int ret = -1 ;
+    if(dfuInterface->isDfuUtilInstalled() == false)
+        return TOOLBOX_DFU_ERROR_OTHER;
+
+    if(dfuInterface->isDfuDeviceExist() == false)
+        return TOOLBOX_DFU_ERROR_CONNECTION;
+
+    if(dfuInterface->getDeviceID() != 0)
+        return TOOLBOX_DFU_ERROR_NO_DEVICE ;
+
+    uint8_t phaseID = 0xFF ;
+    bool isNeedDetach = false ;
+    bool isFlashlayoutSent = false;
+
+    while(1)
+    {
+        ret = getPhase(&phaseID, &isNeedDetach) ;
         if(ret != TOOLBOX_DFU_NO_ERROR)
             break ;
 
-        displayManager.print(MSG_NORMAL, L"Next...");
+        if(phaseID == 0)
+        {
+            if(isFlashlayoutSent == true) //To fix BareMetal Flashing with STM32PRGFW-UTIL for External memory
+                continue;
+
+            displayManager.print(MSG_NORMAL, L"\nFlashlayout Programming ...");
+            std::string tempFile ;
+            ret = fileManager.saveTemproryScriptFile(*parsedTsvFile, tempFile) ;
+            if(ret != 0)
+            {
+                displayManager.print(MSG_ERROR, L"Failed to prepare flashlayout !");
+                break ;
+            }
+
+            ret = dfuInterface->flashPartition(0, tempFile) ;
+            if(ret != 0)
+            {
+                displayManager.print(MSG_ERROR, L"Failed to program flashlayout at partition 0 !");
+            }
+
+            if(fileManager.removeTemproryFile(tempFile.c_str()) != TOOLBOX_DFU_NO_ERROR)
+            {
+                displayManager.print(MSG_ERROR, L"Failed to remove the temprory flashlayout file !");
+                break;
+            }
+
+            if(ret != TOOLBOX_DFU_NO_ERROR)
+                break ;
+
+            ret = dfuInterface->dfuDetach() ;
+            if(ret != 0)
+                break ;
+
+            if(dfuInterface->isDfuDeviceExist(30000) == false)
+            {
+                displayManager.print(MSG_ERROR, L"Failed to reconnect the device !");
+                ret = TOOLBOX_DFU_ERROR_CONNECTION ;
+                break ;
+            }
+            isFlashlayoutSent = true;
+        }
+        else if(phaseID == 0xFE)
+        {
+            displayManager.print(MSG_NORMAL, L"Flashing service completed successfully");
+            break;
+        }
+        else if(phaseID == 0xFF)
+        {
+            displayManager.print(MSG_WARNING, L"Received PhaseID is 0xFF, system is going to reboot");
+            break;
+        }
+        else
+        {
+            for(auto &part: parsedTsvFile->partitionsList)
+            {
+                std::string patternNone = "none\"";
+                if((part.binary == "none") || (part.binary.size() >= patternNone.size() && part.binary.substr(part.binary.size() - patternNone.size()) == patternNone)) //ignore the field containing none keyword
+                    continue ;
+
+                if(part.phaseID == phaseID)
+                {
+                    uint8_t alternateIndex = 0xFF;
+                    ret = this->dfuInterface->getAlternateSettingIndex(phaseID, &alternateIndex);
+                    if(ret != TOOLBOX_DFU_NO_ERROR)
+                        break;
+
+                    ret = dfuInterface->flashPartition(alternateIndex, part.binary) ;
+                    if(ret != 0)
+                        break;
+
+                    sleep(5);
+                    if(phaseID <= 5) // To check FSBL USB enumeration for boot partitions.
+                    {
+                        ret = getPhase(&phaseID, &isNeedDetach) ;
+                        if(ret != TOOLBOX_DFU_NO_ERROR)
+                            break ;
+
+                        if(isNeedDetach == true)
+                        {
+                            ret = dfuInterface->dfuDetach() ;
+                            if(ret != 0)
+                                break;
+
+                            if(dfuInterface->isDfuDeviceExist(30000) == false)
+                            {
+                                displayManager.print(MSG_ERROR, L"Failed to reconnect the device !");
+                                ret = TOOLBOX_DFU_ERROR_CONNECTION ;
+                                break ;
+                            }
+                        }
+                    }
+                    break ;
+                }
+            }
+
+            if(ret != TOOLBOX_DFU_NO_ERROR)
+                break;
+        }
     }
 
     if(ret == TOOLBOX_DFU_NO_ERROR)
@@ -426,4 +540,82 @@ int ProgramManager::startFlashingService(const std::string inputTsvPath)
 
     return ret ;
 
+}
+
+/**
+ * @brief ProgramManager::getPhase : Get the acutal running phase.
+ * @param phase: Output parameter indicating the phase value.
+ * @param isNeedDetach: Output parameter to check if the device requesting a detach.
+ * @return  0 if the operation is performed successfully, otherwise an error occurred.
+ */
+int ProgramManager::getPhase(uint8_t* phase, bool* isNeedDetach)
+{
+    /* https://wiki.st.com/stm32mp25-beta-v5/wiki/How_to_load_U-Boot_with_dfu-util#GetPhase_support_with_dfu-util */
+
+    displayManager.print(MSG_NORMAL, L"DFU Getting Phase ID...\n");
+    int status = TOOLBOX_DFU_NO_ERROR;
+    if(dfuInterface->isDfuDeviceExist() == false)
+        status = TOOLBOX_DFU_ERROR_CONNECTION;
+
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    if(dfuInterface->getDeviceID() != 0)
+        status =  TOOLBOX_DFU_ERROR_NO_DEVICE ;
+
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    std::string tmpPhaseFile = "" ;
+    status = fileManager.getTemproryFile(tmpPhaseFile) ;
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    status = fileManager.removeTemproryFile(tmpPhaseFile) ; // Remove the temporary file to allow dfu-util to create it again
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    uint8_t alternateIndexVirtual = 0xFF;
+    status = this->dfuInterface->getAlternateSettingIndex("virtual", &alternateIndexVirtual);
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    status = dfuInterface->readPartition(tmpPhaseFile, alternateIndexVirtual) ;
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    /* The GetPhase information is now avialable inside the tmpPhaseFile */
+    std::ifstream file(tmpPhaseFile, std::ios::binary);
+    if (!file)
+    {
+        displayManager.print(MSG_ERROR, L"The file does not exist :  %s",  tmpPhaseFile.data());
+        status = TOOLBOX_DFU_ERROR_NO_FILE;
+    }
+
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    GetPhaseStruct data;
+    file.read(reinterpret_cast<char*>(&data), sizeof(data) - 1);
+
+    /* Check if Phase is 0 to read the NeedDFUDetach byte */
+    if (data.Phase == 0)
+        file.read(reinterpret_cast<char*>(&data.NeedDFUDetach), sizeof(data.NeedDFUDetach));
+    else
+        data.NeedDFUDetach = 0;
+
+    file.close();
+
+    status = fileManager.removeTemproryFile(std::move(tmpPhaseFile) ) ; // Remove the temprory file created by dfu-util.
+    if(status != TOOLBOX_DFU_NO_ERROR)
+        return status ;
+
+    *phase =  data.Phase ;
+    *isNeedDetach = (data.NeedDFUDetach != 0) ? true : false;
+
+    displayManager.print(MSG_NORMAL, L"\n + Phase ID       : 0x%02X", *phase);
+    displayManager.print(MSG_NORMAL, L" + Load address   : 0x%08X", data.Address);
+    displayManager.print(MSG_NORMAL, L" + Request detach : %s\n", *isNeedDetach ? "Yes" : "No");
+
+    return status ;
 }

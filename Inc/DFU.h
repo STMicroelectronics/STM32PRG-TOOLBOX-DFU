@@ -33,7 +33,8 @@
 enum STM32MP_DEVICE {
     STM32MP15 = 0x500,
     STM32MP13 = 0x501,
-    STM32MP25 = 0x505
+    STM32MP25 = 0x505,
+    STM32MP21 = 0x503
 };
 
 class DFU
@@ -51,13 +52,15 @@ public:
     bool isDfuUtilInstalled() ;
     int getAlternateSettingIndex(const std::string altName, uint8_t *altIndex);
     int displayDevicesList() ;
+    int readPartition(const std::string filePath, uint8_t altIndex);
+    int getAlternateSettingIndex(const uint8_t phaseId, uint8_t *altIndex);
 
     uint16_t deviceID ;
     std::string otpPartitionName ;
     bool isSTM32PRGFW_UTIL ;
     std::string toolboxFolder = "" ;
     std::string dfuSerialNumber = "" ;
-    std::vector<std::pair<int, std::string>> altSettingList ;
+    std::vector<std::tuple<int, std::string, int>> altSettingList ;
 
 private:
     DisplayManager displayManager = DisplayManager::getInstance() ;

@@ -237,8 +237,14 @@ bool DFU::isDfuDeviceExist(uint32_t msTimeout)
         size_t pos = result.find(searchString);
         if (pos != std::string::npos)
         {
-            isExist = true ;
-            break ;
+            // Check if the DFU name is not 'UNKNOWN', the device is in a transient state, and it needs to retry while awaiting it to be fully ready
+            std::string nameSearchString = "name=\"UNKNOWN\"";
+            size_t namePos = result.find(nameSearchString, pos);
+            if (namePos == std::string::npos)
+            {
+                isExist = true;
+                break;
+            }
         }
 
         // Sleep for a short time to simulate work being done
@@ -602,17 +608,22 @@ int DFU::getAlternateSettingList()
     }
     pclose(pipe);
 
+    altSettingList.clear();
+
     try
     {
-        std::regex altNameRegex("alt=([0-9]+).*?name=\"@([^/]+)");
+        std::regex altNameRegex(R"(alt=([0-9]+),\s*name=\"@([^\s/]+)\s*/(0x[0-9A-Fa-f]+))");
         auto begin = std::sregex_iterator(result.begin(), result.end(), altNameRegex);
         auto end = std::sregex_iterator();
 
-        for (std::sregex_iterator i = begin; i != end; ++i) {
+        for (std::sregex_iterator i = begin; i != end; ++i)
+        {
             std::smatch match = *i;
             int alt = std::stoi(match[1].str());
             std::string name = match[2].str();
-            this->altSettingList.emplace_back(alt, name);
+            name.erase(name.find_last_not_of(" ") + 1);// Remove trailing whitespace
+            int partID = std::stoi(match[3].str(), nullptr, 16); // Convert hex string to int
+            this->altSettingList.emplace_back(alt, name, partID);
         }
     }
     catch (const std::regex_error& e)
@@ -635,20 +646,17 @@ int DFU::getAlternateSettingIndex(const std::string altName, uint8_t *altIndex)
     int ret = TOOLBOX_DFU_NO_ERROR;
     bool isIndexFound = false ;
 
-    if(this->altSettingList.empty())
-    {
-        /* Read the DFU device and get the list of the avaialble alternate setting */
-        ret = getAlternateSettingList() ;
-        if(ret != TOOLBOX_DFU_NO_ERROR)
-            return ret ;
-    }
+    /* Read the DFU device and get the list of the avaialble alternate setting */
+    ret = getAlternateSettingList() ;
+    if(ret != TOOLBOX_DFU_NO_ERROR)
+        return ret ;
 
     /* The List of alternate setting is already populated */
     for(uint8_t idx = 0 ; idx < this->altSettingList.size(); idx ++)
     {
-        if(this->altSettingList.at(idx).second == altName)
+        if(std::get<1>(altSettingList.at(idx)) == altName)
         {
-            *altIndex = this->altSettingList.at(idx).first ;
+            *altIndex = std::get<0>(altSettingList.at(idx)) ;
             isIndexFound = true ;
             displayManager.print(MSG_NORMAL, L"DFU device : Alternate name [%s] is found with alternate index [%d]", altName.c_str(), *altIndex);
             break ;
@@ -733,4 +741,88 @@ int DFU::displayDevicesList()
     }
 
     return TOOLBOX_DFU_NO_ERROR ;
+}
+
+/**
+ * @brief DFU::readPartition: Get the dfu-util command ready, then read the partition and save it into file.
+ * @param filePath: The output binary file to store the  parition data.
+ * @param alternateIndex: The alternate setting index of the dedicated partition to read.
+ * @return 0 if the operation is performed successfully, otherwise an error occurred.
+ */
+int DFU::readPartition(const std::string filePath, uint8_t alternateIndex)
+{
+    std::string  utilCmd =  getDfuUtilProgramPath().append("-d 0483:df11") ;
+    utilCmd.append(" -a ").append(std::to_string(alternateIndex)) ;
+
+    utilCmd.append(" -U ").append(filePath) ;
+    if(this->dfuSerialNumber != "")
+        utilCmd.append(" --serial ").append(this->dfuSerialNumber);
+
+#ifdef _WIN32
+    utilCmd = "\"" + utilCmd + "\"" ;
+#endif
+    displayManager.print(MSG_NORMAL, L"DFU-UTIL command: %s", utilCmd.data()) ;
+
+    FILE* pipe = popen(utilCmd.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        displayManager.print(MSG_ERROR, L"Failed to open pipe") ;
+        return TOOLBOX_DFU_ERROR_OTHER;
+    }
+
+    char buffer[4096];
+    std::string result = "";
+
+    while (!feof(pipe))
+    {
+        if (fgets(buffer, 4096, pipe) != nullptr)
+        {
+            result += buffer;
+        }
+    }
+    pclose(pipe);
+
+    std::string searchString = "Upload done.";
+    size_t pos = result.find(searchString);
+    if (pos != std::string::npos)
+    {
+        displayManager.print(MSG_GREEN, L"Read partition is done successfully !") ;
+        return TOOLBOX_DFU_NO_ERROR ;
+    }
+    else
+    {
+        displayManager.print(MSG_ERROR, L"Read partition is failed !") ;
+        return TOOLBOX_DFU_ERROR_READ ;
+    }
+}
+
+int DFU::getAlternateSettingIndex(const uint8_t phaseId, uint8_t *altIndex)
+{
+    int ret = TOOLBOX_DFU_NO_ERROR;
+    bool isIndexFound = false ;
+
+    /* Read the DFU device and get the list of the avaialble alternate setting */
+    ret = getAlternateSettingList() ;
+    if(ret != TOOLBOX_DFU_NO_ERROR)
+        return ret ;
+
+    /* The List of alternate setting is already populated */
+    for(uint8_t idx = 0 ; idx < this->altSettingList.size(); idx ++)
+    {
+        if(std::get<2>(altSettingList.at(idx)) == phaseId)
+        {
+            *altIndex = std::get<0>(altSettingList.at(idx)) ;
+            isIndexFound = true ;
+            displayManager.print(MSG_NORMAL, L"DFU device : Partition ID [%d] is found with alternate index [%d]", phaseId, *altIndex);
+            break ;
+        }
+    }
+
+    if(isIndexFound == false)
+    {
+        displayManager.print(MSG_ERROR, L"DFU device : Partition ID [%d] does not exist !", phaseId);
+        ret = TOOLBOX_DFU_ERROR_INTERFACE_NOT_SUPPORTED;
+    }
+
+    return ret;
 }

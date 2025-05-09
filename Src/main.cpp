@@ -25,7 +25,7 @@
 #include <experimental/filesystem>
 namespace fs = std::experimental::filesystem;
 
-std::string PRG_TOOLBOX_DFU_VERSION = "2.0.0";
+std::string PRG_TOOLBOX_DFU_VERSION = "2.1.0";
 std::string toolboxRootPath = "" ;
 
 int main(int argc, char* argv[])
@@ -235,6 +235,27 @@ int main(int argc, char* argv[])
                 return EXIT_FAILURE;
             }
         }
+        else if(compareStrings(argumentsList[cmdIdx].cmd , "-p", true) || compareStrings(argumentsList[cmdIdx].cmd , "--phase", true))
+        {
+            if((argumentsList[cmdIdx].nParams != 0))
+            {
+                displayManager.print(MSG_ERROR, L"Wrong parameters for -p/--phase command") ;
+                showHelp();
+                return EXIT_FAILURE;
+            }
+
+            ProgramManager *programMng = new ProgramManager(toolboxRootPath, dfuSerialNumber);
+            int ret = -1 ;
+            uint8_t phase = 0xFF; bool isNeedDetach = false;
+            ret = programMng->getPhase(&phase, &isNeedDetach);
+            delete programMng;
+
+            if(ret)
+            {
+                displayManager.print(MSG_ERROR, L"Get Phase ID command, -p/--phase operation failed !") ;
+                return EXIT_FAILURE;
+            }
+        }
         else
         {
             displayManager.print(MSG_ERROR, L"Wrong command [ %s ]: Unknown command or command missed some parameters.\nPlease refer to the help for the supported commands.", argumentsList[cmdIdx].cmd.c_str()) ;
@@ -367,6 +388,8 @@ void showHelp()
     displayManager.print(MSG_NORMAL, L"--otp         -otp          : Read and write the OTP partition") ;
     displayManager.print(MSG_NORMAL, L"       <operationType>      : read/write") ;
     displayManager.print(MSG_NORMAL, L"       <filePath.bin>       : The output file of the read and the input binary path of the write") ;
+
+    displayManager.print(MSG_NORMAL, L"--phase             -p      : Get and display the running Phase ID.") ;
 
     displayManager.print(MSG_NORMAL, L"") ;
 }
