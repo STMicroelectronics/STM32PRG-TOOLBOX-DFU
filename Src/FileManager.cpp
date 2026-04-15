@@ -213,6 +213,12 @@ int FileManager::splitStdString(std::string str, std::regex delimiter, std::vect
                 std::sregex_token_iterator()
                 );
 
+    for (auto& s : substrings) {
+        if (!s.empty() && s.back() == '\r') {
+            s.pop_back();
+        }
+    }
+
     stringsList = std::move(substrings);
 
     return TOOLBOX_DFU_NO_ERROR ;
@@ -308,6 +314,17 @@ int FileManager::prepareUbootScriptFile(fileTSV &parsedTsvFile)
             /* Decode type field */
             if(parsedTsvFile.partitionsList.at(i).partType.compare("FileSystem") == 0)
                 line.append(",type=").append(guid.at("FileSystem")) ;
+
+            /* manage case of rootfs if the last partition */
+            if(parsedTsvFile.partitionsList.at(i).partName.compare("rootfs") == 0)
+            {
+                if(parsedTsvFile.partitionsList.at(i).partIp.compare("mmc0") == 0)
+                    line.append(",uuid=").append(uuid.at("mmc0")) ;
+                if(parsedTsvFile.partitionsList.at(i).partIp.compare("mmc1") == 0)
+                    line.append(",uuid=").append(uuid.at("mmc1")) ;
+                if(parsedTsvFile.partitionsList.at(i).partIp.compare("mmc2") == 0)
+                    line.append(",uuid=").append(uuid.at("mmc2")) ;
+            }
 
             /* All remaining memory space */
             line.append(",size=-") ;
@@ -434,38 +451,60 @@ int FileManager::saveTemproryScriptFile(const fileTSV parsedTsvFile, std::string
     result = GetTempFileNameA(temp_dir, "STM32", 0, tempFile);
     if (result == 0)
     {
-        displayManager.print(MSG_ERROR, L"Could not get temporary directory!");
+        displayManager.print(MSG_ERROR, L"Could not get temporary file name!");
         return TOOLBOX_DFU_ERROR_NO_FILE;
     }
-#else // Linux & MacOS
-    const char* temp_dir = std::getenv("TMPDIR");
-    if (temp_dir == nullptr)
+
+    // On Windows we can directly open with std::ofstream using the path.
+    std::ofstream outfile(tempFile, std::ios::binary | std::ios::out | std::ios::trunc);
+    if (!outfile.is_open())
+    {
+        displayManager.print(MSG_ERROR, L"Could not open temporary file!");
+        return TOOLBOX_DFU_ERROR_NOT_SUPPORTED;
+    }
+
+#else
+    const char *temp_dir = std::getenv("TMPDIR");
+    if ((temp_dir == nullptr) || (*temp_dir == '\0'))
     {
         temp_dir = "/tmp";
     }
 
-    std::string tempFile = std::string(temp_dir) + "/STM32";
-#endif
+    std::string tmpl = std::string(temp_dir) + "/STM32XXXXXX";
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
 
-#ifdef _WIN32
-    std::ofstream outfile(tempFile, std::ios::binary | std::ios::out | std::ios::trunc);
-#else
-    std::ofstream outfile(tempFile.c_str(), std::ios::binary | std::ios::out | std::ios::trunc);
-#endif
-
-    if (outfile.is_open())
+    int fd = mkstemp(buf.data());
+    if (fd == -1)
     {
-        outfile.write((char*)parsedTsvFile.scriptUbootTsvData, parsedTsvFile.scriptUbootTsvDataSize);
-        outfile.close();
+        displayManager.print(MSG_ERROR, L"Could not create temporary file!");
+        return TOOLBOX_DFU_ERROR_NO_FILE;
     }
-    else
+
+
+    std::string tempFile(buf.data());
+    std::ofstream outfile(tempFile.c_str(), std::ios::binary | std::ios::out | std::ios::trunc);
+    if (!outfile.is_open())
     {
         displayManager.print(MSG_ERROR, L"Could not open temporary file!");
-        return TOOLBOX_DFU_ERROR_NOT_SUPPORTED ;
+        return TOOLBOX_DFU_ERROR_NOT_SUPPORTED;
     }
+#endif
 
-    outTempFile.erase();
-    outTempFile +=  tempFile ;
+    if (parsedTsvFile.scriptUbootTsvData != nullptr && parsedTsvFile.scriptUbootTsvDataSize > 0)
+    {
+        outfile.write(
+            reinterpret_cast<const char*>(parsedTsvFile.scriptUbootTsvData),
+            parsedTsvFile.scriptUbootTsvDataSize
+            );
+    }
+    outfile.close();
+
+#ifdef _WIN32
+    outTempFile = tempFile;
+#else
+    outTempFile = tempFile;
+#endif
 
     return TOOLBOX_DFU_NO_ERROR;
 }
@@ -641,21 +680,30 @@ int FileManager::getTemproryFile(std::string &outTempFile)
     result = GetTempFileNameA(temp_dir, "STM32", 0, tempFile);
     if (result == 0)
     {
-        displayManager.print(MSG_ERROR, L"Could not get temporary directory!");
+        displayManager.print(MSG_ERROR, L"Could not get temporary file name!");
         return TOOLBOX_DFU_ERROR_NO_FILE;
     }
-#else // Linux
-    const char* temp_dir = std::getenv("TMPDIR");
-    if (temp_dir == nullptr)
+
+#else
+    const char *temp_dir = std::getenv("TMPDIR");
+    if ((temp_dir == nullptr) || (*temp_dir == '\0'))
     {
         temp_dir = "/tmp";
     }
 
-    std::string tempFile = std::string(temp_dir) + "/STM32";
+    std::string tmpl = std::string(temp_dir) + "/STM32XXXXXX";
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+
+    int fd = mkstemp(buf.data());
+    if (fd == -1)
+    {
+        displayManager.print(MSG_ERROR, L"Could not create temporary file!");
+        return TOOLBOX_DFU_ERROR_NO_FILE;
+    }
+    const char *tempFile = buf.data();
 #endif
 
-    outTempFile.erase();
-    outTempFile +=  tempFile ;
-
+    outTempFile = tempFile;
     return TOOLBOX_DFU_NO_ERROR;
 }

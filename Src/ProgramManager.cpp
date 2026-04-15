@@ -595,15 +595,23 @@ int ProgramManager::getPhase(uint8_t* phase, bool* isNeedDetach)
     if(status != TOOLBOX_DFU_NO_ERROR)
         return status ;
 
-    GetPhaseStruct data;
-    file.read(reinterpret_cast<char*>(&data), sizeof(data) - 1);
+    uint8_t buf[10];
+    file.read(reinterpret_cast<char*>(buf), sizeof(buf)) ;
 
-    /* Check if Phase is 0 to read the NeedDFUDetach byte */
-    if (data.Phase == 0)
-        file.read(reinterpret_cast<char*>(&data.NeedDFUDetach), sizeof(data.NeedDFUDetach));
-    else
-        data.NeedDFUDetach = 0;
+    GetPhaseStruct data{};
+    data.Phase = buf[0];
 
+    data.Address =  static_cast<uint32_t>(buf[1])
+                   | (static_cast<uint32_t>(buf[2]) << 8)
+                   | (static_cast<uint32_t>(buf[3]) << 16)
+                   | (static_cast<uint32_t>(buf[4]) << 24);
+
+    data.Offset  =  static_cast<uint32_t>(buf[5])
+                  | (static_cast<uint32_t>(buf[6]) << 8)
+                  | (static_cast<uint32_t>(buf[7]) << 16)
+                  | (static_cast<uint32_t>(buf[8]) << 24);
+
+    data.NeedDFUDetach = buf[9];
     file.close();
 
     status = fileManager.removeTemproryFile(std::move(tmpPhaseFile) ) ; // Remove the temprory file created by dfu-util.
